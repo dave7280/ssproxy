@@ -37,11 +37,11 @@ SOCKS5_ADDRESS_TYPE_AUTH = 0x10
 SOCKS5_ADDRESS_TYPE_MASK = 0xF
 
 
-class HttpProxyHandler(tornado.web.RequestHandler):
+class SSHttpProxyHandler(tornado.web.RequestHandler):
     SUPPORTED_METHODS = ['GET', 'POST', 'CONNECT']
 
     def __init__(self, *args, **kwargs):
-        super(HttpProxyHandler, self).__init__(*args, **kwargs)
+        super(SSHttpProxyHandler, self).__init__(*args, **kwargs)
         self.upstream = None
         self.client = None
 
@@ -129,6 +129,8 @@ class StreamChannel(object):
         self.local_stream = stream
         self.remote_address = None
         self.remote_stream = None
+        # self.local_stream = tornado.iostream.IOStream()
+        # self.remote_stream = tornado.iostream.IOStream()
         future = self.start()
         tornado.ioloop.IOLoop.instance().add_future(future, callback=lambda f: f.result())
 
@@ -141,11 +143,28 @@ class StreamChannel(object):
         if not r:
             self.destroy()
             raise gen.Return()
+
         r = yield self.socks5_request()
         if not r:
             self.destroy()
             raise gen.Return()
-        self.destroy()
+        self.start_channel()
+
+    @gen.coroutine
+    def start_channel(self):
+        # assert self.local_address and self.remote_address, "stream address error"
+        logging.info("connecting %s:%d from %s:%d",
+                     self.remote_address[0], self.remote_address[1],
+                     self.local_address[0], self.local_address[1])
+        try:
+            self.remote_stream = yield tcpclient.TCPClient().connect(host=self.remote_address[0],
+                                                                     port=self.remote_address[1])
+        except IOError:
+            logging.warning("connect %s:%d failed", self.remote_address[0], self.remote_address[1])
+            self.destroy()
+            raise gen.Return()
+        yield [self.local_stream.read_until_close(streaming_callback=self.remote_stream.write),
+               self.remote_stream.read_until_close(streaming_callback=self.local_stream.write)]
 
     @gen.coroutine
     def socks5_auth(self):
@@ -234,9 +253,13 @@ class StreamChannel(object):
             data = yield self.local_stream.read_bytes(_len + 2)
             dest_addr = data[:_len]
             dest_port = struct.unpack("!H", data[_len:])[0]
-        logging.debug("SOCKS request connect to %s:%d", dest_addr, dest_port)
         self.local_stream.write(b'\x05\x00\x00\x01'
                                 b'\x00\x00\x00\x00\x10\x10'),
+        if not dest_addr or not dest_port:
+            logging.warning("unsupported addrtype %d", address_type)
+            raise gen.Return(False)
+        self.remote_address = dest_addr, dest_port
+        raise gen.Return(True)
 
     def destroy(self):
         if self.local_stream:
@@ -248,20 +271,19 @@ class StreamChannel(object):
             self.remote_stream.close()
 
 
-class SSRunSocksServer(tcpserver.TCPServer):
+class SSSocksProxy(tcpserver.TCPServer):
     def __init__(self, *args, **kwargs):
-        super(SSRunSocksServer, self).__init__(*args, **kwargs)
+        super(SSSocksProxy, self).__init__(*args, **kwargs)
 
     def handle_stream(self, stream, address):
-        logging.debug("connection from %s", address)
         StreamChannel(stream, address)
         # channel.local_stream, channel.local_address = stream, address
 
 
 def ss_run_proxy(port):
-    # app = tornado.web.Application([ (r'.*', SSProxyHandler), ])
+    # app = tornado.web.Application([ (r'.*', SSHttpProxyHandler), ])
     # app.listen(port)
-    server = SSRunSocksServer()
+    server = SSSocksProxy()
     server.listen(port)
     server.start()
 

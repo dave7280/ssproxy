@@ -1,3 +1,3 @@
-# ssrun
+# ssproxy
 
-a simple proxy written by tornado
+super simple proxy
