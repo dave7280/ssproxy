@@ -150,6 +150,12 @@ class StreamChannel(object):
             raise gen.Return()
         self.start_channel()
 
+    def read_from_local(self, data):
+        self.remote_stream.write(data)
+
+    def read_from_remote(self, data):
+        self.local_stream.write(data)
+
     @gen.coroutine
     def start_channel(self):
         # assert self.local_address and self.remote_address, "stream address error"
@@ -163,8 +169,11 @@ class StreamChannel(object):
             logging.warning("connect %s:%d failed", self.remote_address[0], self.remote_address[1])
             self.destroy()
             raise gen.Return()
-        yield [self.local_stream.read_until_close(streaming_callback=self.remote_stream.write),
-               self.remote_stream.read_until_close(streaming_callback=self.local_stream.write)]
+        try:
+            yield [self.local_stream.read_until_close(streaming_callback=self.read_from_local),
+                   self.remote_stream.read_until_close(streaming_callback=self.read_from_remote)]
+        except tornado.iostream.StreamClosedError:
+            logging.warning("stream is closed")
 
     @gen.coroutine
     def socks5_auth(self):
