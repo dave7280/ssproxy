@@ -16,7 +16,8 @@ from tornado.options import options, define
 
 import common
 
-define('port', default=8888, type=int, help="listen port")
+define('http-port', default=8080, type=int, help="http listen port")
+define('port', default=8888, type=int, help="socks listen port")
 
 SOCKS5_VERSION = 5
 
@@ -62,8 +63,8 @@ class SSHttpProxyHandler(tornado.web.RequestHandler):
         self.finish()
 
     @gen.coroutine
-    def get(self):
-        logging.info('Handle request from %s to %s %s',
+    def get_or_post_method(self):
+        logging.info('http request from %s to %s %s',
                      self.request.remote_ip, self.request.method, self.request.uri)
         try:
             if 'Proxy-Connection' in self.request.headers:
@@ -85,19 +86,23 @@ class SSHttpProxyHandler(tornado.web.RequestHandler):
                 self.set_status(500)
                 self.write('Internal server error:\n' + str(e))
                 self.finish()
+    @gen.coroutine
+    def get(self):
+        yield self.get_or_post_method()
 
     @gen.coroutine
     def post(self):
-        yield self.get()
+        yield self.get_or_post_method()
 
     @tornado.web.asynchronous
     def connect(self):
-        logging.info('Start CONNECT to %s from %s', self.request.uri, self.request.remote_ip)
+        logging.info('start connect to %s from %s:%d',
+                     self.request.uri,
+                     self.request.connection.context.address[0],
+                     self.request.connection.context.address[1])
+
         host, port = httputil.split_host_and_port(self.request.uri)
-        self.client = self.request.connection.stream
-        c = tcpclient.TCPClient()
-        future = c.connect(host, port)
-        tornado.ioloop.IOLoop.current().add_future(future, self.start_tunnel)
+        self.start_tunnel(host, port)
 
     def client_close(self, data=None):
         logging.debug('%s client closing', self.request.uri)
@@ -114,13 +119,17 @@ class SSHttpProxyHandler(tornado.web.RequestHandler):
         if data:
             self.client.write(data)
         self.client.close()
-
-    def start_tunnel(self, future):
-        self.upstream = future.result()
-        logging.debug('CONNECT tunnel established to %s', self.request.uri)
-        self.client.read_until_close(self.client_close, self.upstream.write)
-        self.upstream.read_until_close(self.upstream_close, self.client.write)
+    @gen.coroutine
+    def start_tunnel(self, host, port):
+        try:
+            self.client = self.request.connection.detach()
+            self.upstream = yield tcpclient.TCPClient().connect(host, port)
+        except:
+            logging.warning("connect to %s failed", self.request.uri)
+            raise gen.Return()
         self.client.write(b'HTTP/1.0 200 Connection established\r\n\r\n')
+        self.client.read_until_close(self.client_close, streaming_callback=self.upstream.write)
+        self.upstream.read_until_close(self.upstream_close, streaming_callback=self.client.write)
 
 
 class StreamChannel(object):
@@ -129,8 +138,8 @@ class StreamChannel(object):
         self.local_stream = stream
         self.remote_address = None
         self.remote_stream = None
-        # self.local_stream = tornado.iostream.IOStream()
-        # self.remote_stream = tornado.iostream.IOStream()
+        self.local_stream = tornado.iostream.IOStream()
+        self.remote_stream = tornado.iostream.IOStream()
         future = self.start()
         tornado.ioloop.IOLoop.instance().add_future(future, callback=lambda f: f.result())
 
@@ -150,15 +159,20 @@ class StreamChannel(object):
             raise gen.Return()
         self.start_channel()
 
-    def read_from_local(self, data):
-        self.remote_stream.write(data)
+    def _read_from_local(self, data):
+        if self.remote_stream.closed():
+            self.destroy()
+        else:
+            self.remote_stream.write(data)
 
-    def read_from_remote(self, data):
-        self.local_stream.write(data)
+    def _read_from_remote(self, data):
+        if self.local_stream.closed():
+            self.destroy()
+        else:
+            self.local_stream.write(data)
 
     @gen.coroutine
     def start_channel(self):
-        # assert self.local_address and self.remote_address, "stream address error"
         logging.info("connecting %s:%d from %s:%d",
                      self.remote_address[0], self.remote_address[1],
                      self.local_address[0], self.local_address[1])
@@ -170,8 +184,9 @@ class StreamChannel(object):
             self.destroy()
             raise gen.Return()
         try:
-            yield [self.local_stream.read_until_close(streaming_callback=self.read_from_local),
-                   self.remote_stream.read_until_close(streaming_callback=self.read_from_remote)]
+            yield [self.local_stream.read_until_close(streaming_callback=self._read_from_local),
+                   self.remote_stream.read_until_close(streaming_callback=self._read_from_remote)]
+            self.destroy()
         except tornado.iostream.StreamClosedError:
             logging.warning("stream is closed")
 
@@ -274,10 +289,12 @@ class StreamChannel(object):
         if self.local_stream:
             logging.debug("destroying local stream")
             self.local_stream.close()
+            self.local_stream = None
 
         if self.remote_stream:
             logging.debug("destroying remote stream")
             self.remote_stream.close()
+            self.remote_stream = None
 
 
 class SSSocksProxy(tcpserver.TCPServer):
@@ -289,17 +306,24 @@ class SSSocksProxy(tcpserver.TCPServer):
         # channel.local_stream, channel.local_address = stream, address
 
 
-def ss_run_proxy(port):
+# def ss_run_proxy(port):
     # app = tornado.web.Application([ (r'.*', SSHttpProxyHandler), ])
     # app.listen(port)
-    server = SSSocksProxy()
-    server.listen(port)
-    server.start()
+    # server = SSSocksProxy()
+    # server.listen(port)
+    # server.start()
 
 
 if __name__ == '__main__':
     options.parse_command_line()
-    logging.info("Starting HTTP proxy on port %d" % options.port)
-    ss_run_proxy(options.port)
+    logging.info("Starting SOCKS proxy on %d and HTTP proxy on port %d",
+                 options.port,
+                 options.http_port)
+    # http
+    app = tornado.web.Application([ (r'.*', SSHttpProxyHandler), ])
+    app.listen(options.http_port)
+    # socks
+    server = SSSocksProxy()
+    server.listen(options.port)
     loop = tornado.ioloop.IOLoop.instance()
     loop.start()
