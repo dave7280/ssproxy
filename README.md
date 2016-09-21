@@ -3,7 +3,7 @@
 super simple proxy using Tornado
 
 Features:
-- http
+- http and https
 - socks5
 - shadowsocks client
 
