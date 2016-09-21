@@ -15,7 +15,7 @@ Features:
 
 # Usage
 
-Help:
+Options:
 
     $python proxy.py --help
 
