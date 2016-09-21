@@ -160,7 +160,7 @@ class StreamChannel(object):
         self.local_stream = stream
         self.remote_address = None
         self.remote_stream = None
-        self.remote_addtype = None
+        self.address_type = None
         future = self.start()
         tornado.ioloop.IOLoop.instance().add_future(future, callback=lambda
             f: f.result())
