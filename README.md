@@ -41,3 +41,8 @@ run as a shadowsocks client:
 
     $python proxy.py --shadow=<address> --shadow-port=<port> --shadow-password=<password>
 
+# TODO
+- config file
+- dynamic config and running status using browser
+- plugin support
+- ssproxy server to cross `f*re-w*lls`
