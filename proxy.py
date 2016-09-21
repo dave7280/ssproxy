@@ -25,7 +25,7 @@ define('port', default=3333, type=int, help="socks listen port")
 
 define('shadow', type=str, help="shadow server address")
 define('shadow-port', type=int, help="shadow server port")
-define('shadow-password', type=int, help="shadow server password")
+define('shadow-password', type=str, help="shadow server password")
 define('shadow-method', default="aes-256-cfb", type=str,
        help="shadow crypto method")
 define('version', type=bool, help="show version information",
