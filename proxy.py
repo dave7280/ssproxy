@@ -138,8 +138,8 @@ class StreamChannel(object):
         self.local_stream = stream
         self.remote_address = None
         self.remote_stream = None
-        self.local_stream = tornado.iostream.IOStream()
-        self.remote_stream = tornado.iostream.IOStream()
+        # self.local_stream = tornado.iostream.IOStream()
+        # self.remote_stream = tornado.iostream.IOStream()
         future = self.start()
         tornado.ioloop.IOLoop.instance().add_future(future, callback=lambda f: f.result())
 
@@ -148,13 +148,18 @@ class StreamChannel(object):
 
     @gen.coroutine
     def start(self):
-        r = yield self.socks5_auth()
-        if not r:
-            self.destroy()
-            raise gen.Return()
+        try:
+            r = yield self.socks5_auth()
+            if not r:
+                self.destroy()
+                raise gen.Return()
 
-        r = yield self.socks5_request()
-        if not r:
+            r = yield self.socks5_request()
+            if not r:
+                self.destroy()
+                raise gen.Return()
+        except:
+            logging.warning("SOCKS stream failed")
             self.destroy()
             raise gen.Return()
         self.start_channel()
@@ -173,7 +178,7 @@ class StreamChannel(object):
 
     @gen.coroutine
     def start_channel(self):
-        logging.info("connecting %s:%d from %s:%d",
+        logging.info("connect to %s:%d from %s:%d",
                      self.remote_address[0], self.remote_address[1],
                      self.local_address[0], self.local_address[1])
         try:
@@ -303,16 +308,6 @@ class SSSocksProxy(tcpserver.TCPServer):
 
     def handle_stream(self, stream, address):
         StreamChannel(stream, address)
-        # channel.local_stream, channel.local_address = stream, address
-
-
-# def ss_run_proxy(port):
-    # app = tornado.web.Application([ (r'.*', SSHttpProxyHandler), ])
-    # app.listen(port)
-    # server = SSSocksProxy()
-    # server.listen(port)
-    # server.start()
-
 
 if __name__ == '__main__':
     options.parse_command_line()
