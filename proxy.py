@@ -10,8 +10,7 @@ import tornado.httpserver
 import tornado.ioloop
 import tornado.iostream
 import tornado.web
-from tornado import gen, httpclient, tcpclient, httputil
-from tornado import tcpserver
+from tornado import gen, httpclient, tcpclient, httputil, tcpserver
 from tornado.options import options, define
 
 import common
@@ -311,7 +310,7 @@ class SSSocksProxy(tcpserver.TCPServer):
 
 if __name__ == '__main__':
     options.parse_command_line()
-    logging.info("Starting SOCKS proxy on %d and HTTP proxy on port %d",
+    logging.info("Starting proxy SOCKS5(%d) HTTP(%d)",
                  options.port,
                  options.http_port)
     # http
