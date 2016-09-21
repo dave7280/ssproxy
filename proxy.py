@@ -1,7 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+from __future__ import absolute_import, division, print_function, \
+    with_statement
 
+import sys
 import logging
 import socket
 import struct
@@ -14,9 +17,19 @@ from tornado import gen, httpclient, tcpclient, httputil, tcpserver
 from tornado.options import options, define
 
 import common
+import crypto
 
-define('http-port', default=8080, type=int, help="http listen port")
-define('port', default=8888, type=int, help="socks listen port")
+define('proxy', default="shadow", type=str, help="proxy method",
+       metavar="shadow|http|socks5")
+define('port', default=3333, type=int, help="socks listen port")
+
+define('shadow', type=str, help="shadow server address")
+define('shadow-port', type=int, help="shadow server port")
+define('shadow-password', type=int, help="shadow server password")
+define('shadow-method', default="aes-256-cfb", type=str,
+       help="shadow crypto method")
+define('version', type=bool, help="show version information",
+       callback=lambda v:[print("ssproxy 0.0.1"), sys.exit(0)])
 
 SOCKS5_VERSION = 5
 
@@ -46,15 +59,20 @@ class SSHttpProxyHandler(tornado.web.RequestHandler):
         self.client = None
 
     def handle_response(self, response):
-        if response.error and not isinstance(response.error, tornado.httpclient.HTTPError):
+        if response.error and not isinstance(response.error,
+                                             tornado.httpclient.HTTPError):
             self.set_status(500)
             self.write('Internal server error:\n' + str(response.error))
         else:
             self.set_status(response.code, response.reason)
 
             for header, v in response.headers.get_all():
-                if header not in ('Content-Length', 'Transfer-Encoding', 'Content-Encoding', 'Connection'):
-                    self.add_header(header, v)  # some header appear multiple times, eg 'Set-Cookie'
+                if header not in (
+                        'Content-Length', 'Transfer-Encoding',
+                        'Content-Encoding',
+                        'Connection'):
+                    self.add_header(header,
+                                    v)  # some header appear multiple times, eg 'Set-Cookie'
 
             if response.body:
                 self.set_header('Content-Length', len(response.body))
@@ -64,7 +82,8 @@ class SSHttpProxyHandler(tornado.web.RequestHandler):
     @gen.coroutine
     def get_or_post_method(self):
         logging.info('http request from %s to %s %s',
-                     self.request.remote_ip, self.request.method, self.request.uri)
+                     self.request.remote_ip, self.request.method,
+                     self.request.uri)
         try:
             if 'Proxy-Connection' in self.request.headers:
                 del self.request.headers['Proxy-Connection']
@@ -85,6 +104,7 @@ class SSHttpProxyHandler(tornado.web.RequestHandler):
                 self.set_status(500)
                 self.write('Internal server error:\n' + str(e))
                 self.finish()
+
     @gen.coroutine
     def get(self):
         yield self.get_or_post_method()
@@ -118,6 +138,7 @@ class SSHttpProxyHandler(tornado.web.RequestHandler):
         if data:
             self.client.write(data)
         self.client.close()
+
     @gen.coroutine
     def start_tunnel(self, host, port):
         try:
@@ -127,8 +148,10 @@ class SSHttpProxyHandler(tornado.web.RequestHandler):
             logging.warning("connect to %s failed", self.request.uri)
             raise gen.Return()
         self.client.write(b'HTTP/1.0 200 Connection established\r\n\r\n')
-        self.client.read_until_close(self.client_close, streaming_callback=self.upstream.write)
-        self.upstream.read_until_close(self.upstream_close, streaming_callback=self.client.write)
+        self.client.read_until_close(self.client_close,
+                                     streaming_callback=self.upstream.write)
+        self.upstream.read_until_close(self.upstream_close,
+                                       streaming_callback=self.client.write)
 
 
 class StreamChannel(object):
@@ -137,10 +160,10 @@ class StreamChannel(object):
         self.local_stream = stream
         self.remote_address = None
         self.remote_stream = None
-        # self.local_stream = tornado.iostream.IOStream()
-        # self.remote_stream = tornado.iostream.IOStream()
+        self.remote_addtype = None
         future = self.start()
-        tornado.ioloop.IOLoop.instance().add_future(future, callback=lambda f: f.result())
+        tornado.ioloop.IOLoop.instance().add_future(future, callback=lambda
+            f: f.result())
 
     def __hash__(self):
         return id(self)
@@ -161,7 +184,7 @@ class StreamChannel(object):
             logging.warning("SOCKS stream failed")
             self.destroy()
             raise gen.Return()
-        self.start_channel()
+        yield self.start_channel()
 
     def _read_from_local(self, data):
         if self.remote_stream.closed():
@@ -181,15 +204,19 @@ class StreamChannel(object):
                      self.remote_address[0], self.remote_address[1],
                      self.local_address[0], self.local_address[1])
         try:
-            self.remote_stream = yield tcpclient.TCPClient().connect(host=self.remote_address[0],
-                                                                     port=self.remote_address[1])
+            self.remote_stream = yield tcpclient.TCPClient().connect(
+                host=self.remote_address[0],
+                port=self.remote_address[1])
         except IOError:
-            logging.warning("connect %s:%d failed", self.remote_address[0], self.remote_address[1])
+            logging.warning("connect %s:%d failed", self.remote_address[0],
+                            self.remote_address[1])
             self.destroy()
             raise gen.Return()
         try:
-            yield [self.local_stream.read_until_close(streaming_callback=self._read_from_local),
-                   self.remote_stream.read_until_close(streaming_callback=self._read_from_remote)]
+            yield [self.local_stream.read_until_close(
+                streaming_callback=self._read_from_local),
+                self.remote_stream.read_until_close(
+                    streaming_callback=self._read_from_remote)]
             self.destroy()
         except tornado.iostream.StreamClosedError:
             logging.warning("stream is closed")
@@ -207,7 +234,8 @@ class StreamChannel(object):
         socks_version = common.ord(data[0])
         n_methods = common.ord(data[1])
         if socks_version != SOCKS5_VERSION:
-            logging.warning('unsupported SOCKS protocol version ' + str(socks_version))
+            logging.warning(
+                'unsupported SOCKS protocol version ' + str(socks_version))
             raise gen.Return(False)
         if n_methods < 1:
             raise gen.Return(False)
@@ -219,7 +247,8 @@ class StreamChannel(object):
                 no_auth_exist = True
                 break
         if not no_auth_exist:
-            logging.warning('none of SOCKS METHOD\'s requested by client is supported')
+            logging.warning(
+                'none of SOCKS METHOD\'s requested by client is supported')
             raise gen.Return(False)
         else:
             self.local_stream.write(b'\x05\00')
@@ -240,7 +269,8 @@ class StreamChannel(object):
         data = yield self.local_stream.read_bytes(4)
         socks_version = common.ord(data[0])
         if socks_version != SOCKS5_VERSION:
-            logging.warning('unsupported SOCKS protocol version ' + str(socks_version))
+            logging.warning(
+                'unsupported SOCKS protocol version ' + str(socks_version))
             raise gen.Return(False)
         command = common.ord(data[1])
         if command == SOCKS5_CMD_UDP_ASSOCIATE:
@@ -286,6 +316,7 @@ class StreamChannel(object):
         if not dest_addr or not dest_port:
             logging.warning("unsupported addrtype %d", address_type)
             raise gen.Return(False)
+        self.address_type = address_type
         self.remote_address = dest_addr, dest_port
         raise gen.Return(True)
 
@@ -301,23 +332,82 @@ class StreamChannel(object):
             self.remote_stream = None
 
 
+class ShadowChannel(StreamChannel):
+    def __init__(self, stream, address):
+        self.encryptor = crypto.Encryptor(options.shadow_password,
+                                          options.shadow_method)
+        self.shadow_address = options.shadow, options.shadow_port
+        super(ShadowChannel, self).__init__(stream, address)
+
+    def _read_from_local(self, data):
+        if self.remote_stream.closed():
+            self.destroy()
+        else:
+            self.remote_stream.write(self.encryptor.encrypt(data))
+
+    def _read_from_remote(self, data):
+        if self.local_stream.closed():
+            self.destroy()
+        else:
+            self.local_stream.write(self.encryptor.decrypt(data))
+
+    @gen.coroutine
+    def start_channel(self):
+        logging.info("connect to %s:%d from %s:%d, via shadow %s:%d",
+                     self.remote_address[0], self.remote_address[1],
+                     self.shadow_address[0], self.shadow_address[1],
+                     self.local_address[0], self.local_address[1])
+        try:
+            self.remote_stream = yield tcpclient.TCPClient().connect(
+                host=self.shadow_address[0],
+                port=self.shadow_address[1])
+        except IOError:
+            logging.warning("connect shadow %s:%d failed",
+                            self.shadow_address[0],
+                            self.shadow_address[1])
+            self.destroy()
+            raise gen.Return()
+
+        try:
+            data = common.chr(self.address_type)
+            if self.address_type == SOCKS5_ADDRESS_TYPE_HOST:
+                data += common.chr(len(self.remote_address[0]))
+            data += self.remote_address[0] + \
+                    struct.pack("!H", self.remote_address[1])
+            self.remote_stream.write(self.encryptor.encrypt(data))
+            yield [self.local_stream.read_until_close(
+                streaming_callback=self._read_from_local),
+                self.remote_stream.read_until_close(
+                    streaming_callback=self._read_from_remote)]
+            self.destroy()
+        except tornado.iostream.StreamClosedError:
+            logging.warning("stream is closed")
+
+
 class SSSocksProxy(tcpserver.TCPServer):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, channel, *args, **kwargs):
         super(SSSocksProxy, self).__init__(*args, **kwargs)
+        self.channel = channel
 
     def handle_stream(self, stream, address):
-        StreamChannel(stream, address)
+        channel = self.channel(stream, address)
+
 
 if __name__ == '__main__':
     options.parse_command_line()
-    logging.info("Starting proxy SOCKS5(%d) HTTP(%d)",
-                 options.port,
-                 options.http_port)
-    # http
-    app = tornado.web.Application([ (r'.*', SSHttpProxyHandler), ])
-    app.listen(options.http_port)
-    # socks
-    server = SSSocksProxy()
-    server.listen(options.port)
+    if options.proxy == "http":
+        app = tornado.web.Application([(r'.*', SSHttpProxyHandler), ])
+        app.listen(options.port)
+    elif options.proxy == "socks5":
+        server = SSSocksProxy(StreamChannel)
+        server.listen(options.port)
+    elif options.proxy == "shadow":
+        if not options.shadow or not options.shadow_port or \
+                not options.shadow_method:
+            logging.error("confirm shadow options is correct")
+            sys.exit(2)
+        server = SSSocksProxy(ShadowChannel)
+        server.listen(options.port)
+    logging.info("Starting proxy %s:%d", options.proxy, options.port)
     loop = tornado.ioloop.IOLoop.instance()
     loop.start()
