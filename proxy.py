@@ -340,22 +340,25 @@ class ShadowChannel(StreamChannel):
         super(ShadowChannel, self).__init__(stream, address)
 
     def _read_from_local(self, data):
-        if self.remote_stream.closed():
+        if not self.remote_stream:
+            return
+        elif self.remote_stream.closed():
             self.destroy()
         else:
             self.remote_stream.write(self.encryptor.encrypt(data))
 
     def _read_from_remote(self, data):
-        if self.local_stream.closed():
+        if not self.local_stream:
+            return
+        elif self.local_stream.closed():
             self.destroy()
         else:
             self.local_stream.write(self.encryptor.decrypt(data))
 
     @gen.coroutine
     def start_channel(self):
-        logging.info("connect to %s:%d from %s:%d, via shadow %s:%d",
+        logging.info("connect to %s:%d from %s:%d",
                      self.remote_address[0], self.remote_address[1],
-                     self.shadow_address[0], self.shadow_address[1],
                      self.local_address[0], self.local_address[1])
         try:
             self.remote_stream = yield tcpclient.TCPClient().connect(
@@ -375,11 +378,9 @@ class ShadowChannel(StreamChannel):
             data += self.remote_address[0] + \
                     struct.pack("!H", self.remote_address[1])
             self.remote_stream.write(self.encryptor.encrypt(data))
-            yield [self.local_stream.read_until_close(
-                streaming_callback=self._read_from_local),
-                self.remote_stream.read_until_close(
-                    streaming_callback=self._read_from_remote)]
-            self.destroy()
+            self.local_stream.read_until_close(streaming_callback=self._read_from_local)
+            self.remote_stream.read_until_close(streaming_callback=self._read_from_remote)
+            # self.destroy()
         except tornado.iostream.StreamClosedError:
             logging.warning("stream is closed")
 
