@@ -1,0 +1,7 @@
+# config example for ssrpoxy
+proxy="shadow"
+port=3333
+shadow_server="localhost"
+shadow_password=""
+shadow_method="aes-256-cfb"
+shadow_port=3333

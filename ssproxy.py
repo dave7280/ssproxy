@@ -22,14 +22,14 @@ import crypto
 define('proxy', default="shadow", type=str, help="proxy method",
        metavar="shadow|http|socks5")
 define('port', default=3333, type=int, help="socks listen port")
-
-define('shadow', type=str, help="shadow server address")
+define('shadow-server', type=str, help="shadow server address")
 define('shadow-port', type=int, help="shadow server port")
 define('shadow-password', type=str, help="shadow server password")
 define('shadow-method', default="aes-256-cfb", type=str,
        help="shadow crypto method")
 define('version', type=bool, help="show version information",
        callback=lambda v:[print("ssproxy 0.0.1"), sys.exit(0)])
+define('config', type=str, help="ssproxy config file")
 
 SOCKS5_VERSION = 5
 
@@ -396,6 +396,8 @@ class SSSocksProxy(tcpserver.TCPServer):
 
 if __name__ == '__main__':
     options.parse_command_line()
+    if options.config:
+        options.parse_config_file(options.config)
     if options.proxy == "http":
         app = tornado.web.Application([(r'.*', SSHttpProxyHandler), ])
         app.listen(options.port)
@@ -403,9 +405,9 @@ if __name__ == '__main__':
         server = SSSocksProxy(StreamChannel)
         server.listen(options.port)
     elif options.proxy == "shadow":
-        if not options.shadow or not options.shadow_port or \
+        if not options.shadow_server or not options.shadow_port or \
                 not options.shadow_method:
-            logging.error("confirm shadow options is correct")
+            logging.error("shadow options is not correct")
             sys.exit(2)
         server = SSSocksProxy(ShadowChannel)
         server.listen(options.port)
