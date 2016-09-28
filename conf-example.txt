@@ -5,4 +5,4 @@ shadow_server   = ["s7.freessr.cf"]
 shadow_password = ["kingss.win"]
 shadow_method   = ["aes-256-cfb"]
 shadow_port     = [31857]
-# autoshadow      = True
+autoshadow      = True

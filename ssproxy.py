@@ -5,6 +5,8 @@ from __future__ import absolute_import, division, print_function, \
     with_statement
 
 import sys
+from random import randint
+import time
 import logging
 import socket
 import struct
@@ -157,16 +159,16 @@ class SSHttpProxyHandler(tornado.web.RequestHandler):
                                        streaming_callback=self.client.write)
 
 
-class StreamChannel(object):
-    def __init__(self, stream, address):
+class Socks5Channel(object):
+    """ Common SOCKS5 Channel """
+    def __init__(self, stream, address, **kwargs):
         self.local_address = address
         self.local_stream = stream
         self.remote_address = None
         self.remote_stream = None
         self.address_type = None
         future = self.start()
-        tornado.ioloop.IOLoop.instance().add_future(future, callback=lambda
-            f: f.result())
+        tornado.ioloop.IOLoop.instance().add_future(future, callback=lambda f: f.result())
 
     def __hash__(self):
         return id(self)
@@ -335,12 +337,16 @@ class StreamChannel(object):
             self.remote_stream = None
 
 
-class ShadowChannel(StreamChannel):
-    def __init__(self, stream, address):
-        self.encryptor = crypto.Encryptor(options.shadow_password[0],
-                                          options.shadow_method[0])
-        self.shadow_address = options.shadow_server[0], options.shadow_port[0]
-        super(ShadowChannel, self).__init__(stream, address)
+class ShadowChannel(Socks5Channel):
+    def __init__(self, stream, address, **kwargs):
+        try:
+            self.encryptor = crypto.Encryptor(kwargs.get('password'), kwargs.get('method'))
+            self.shadow_address = kwargs.get('server'), kwargs.get('port')
+            self.stat_cb = kwargs.get('stat_cb')
+            super(ShadowChannel, self).__init__(stream, address)
+        except:
+            logging.warning("server %s ", kwargs.get('server'))
+            raise Exception()
 
     def _read_from_local(self, data):
         if not self.remote_stream:
@@ -365,14 +371,18 @@ class ShadowChannel(StreamChannel):
                      self.local_address[0], self.local_address[1],
                      self.shadow_address[0], self.shadow_address[1])
         try:
-            # logging.info("use shadow %s:%s", self.shadow_address[0], type(self.shadow_address[1]))
+            start = time.time()
             self.remote_stream = yield tcpclient.TCPClient().connect(
                 host=self.shadow_address[0],
                 port=self.shadow_address[1])
+            if self.stat_cb:
+                self.stat_cb(self.shadow_address[0], time.time() - start)
         except IOError:
             logging.warning("connect shadow %s:%d failed",
                             self.shadow_address[0],
                             self.shadow_address[1])
+            if self.stat_cb:
+                self.stat_cb(self.shadow_address[0], -1)
             self.destroy()
             raise gen.Return()
 
@@ -380,8 +390,7 @@ class ShadowChannel(StreamChannel):
             data = common.chr(self.address_type)
             if self.address_type == SOCKS5_ADDRESS_TYPE_HOST:
                 data += common.chr(len(self.remote_address[0]))
-            data += self.remote_address[0] + \
-                    struct.pack("!H", self.remote_address[1])
+            data += self.remote_address[0] + struct.pack("!H", self.remote_address[1])
             self.remote_stream.write(self.encryptor.encrypt(data))
             self.local_stream.read_until_close(streaming_callback=self._read_from_local)
             self.remote_stream.read_until_close(streaming_callback=self._read_from_remote)
@@ -391,51 +400,109 @@ class ShadowChannel(StreamChannel):
 
 
 class SSSocksProxy(tcpserver.TCPServer):
-    def __init__(self, channel, config=None, *args, **kwargs):
+    def __init__(self, delegate, config=options.as_dict(), *args, **kwargs):
         super(SSSocksProxy, self).__init__(*args, **kwargs)
-        self.channel = channel
+        self.delegate = delegate
         self.config = config
+        self.config['auto-time'] = 3600  # seconds
+        if self.config['autoshadow']:
+            self.auto_shadow_init(kwargs.get('io_loop'))
+        # self._shadow_load()
 
-    def shadow(self):
-        pass
+    def _shadow_load(self):
+        self.shadow_server = {}
+        self.shadow_server_weight = []
+        i = 0
+        init_weight = 16
+        for _server, password, port, method in \
+            zip(self.config.get('shadow-server'), self.config.get('shadow-password'),
+                self.config.get('shadow-port'), self.config.get('shadow-method')):
+            self.shadow_server[_server] = (_server, password, port, method, i)
+            self.shadow_server_weight.append([_server, init_weight])
+            i += 1
+        self.weight_sum = i*init_weight
 
-    def shadow_stat(self, server, connect_time):
-        pass
+    def shadow_account(self):
+        """return shadow account"""
+        if self.weight_sum <= 0:
+            logging.warning("weight count less 0")
+            self._shadow_load()
+        r = randint(0, self.weight_sum)
+        n = 0
+        for _server, weight in self.shadow_server_weight:
+            n += weight
+            if n >= r:
+                return self.shadow_server[_server]
+        return None
+
+    def shadow_stat(self, server_name, connect_time):
+        i = self.shadow_server[server_name][4]
+        if connect_time >= 0:
+            if self.shadow_server_weight[i][1] >= 100:
+                return
+            self.shadow_server_weight[i][1] += 1
+            self.weight_sum += 1
+        elif self.shadow_server_weight[i][1] > 0:
+            old = self.shadow_server_weight[i][1]
+            self.shadow_server_weight[i][1] //= 2
+            self.weight_sum -= old - self.shadow_server_weight[i][1]
 
     def handle_stream(self, stream, address):
-        channel = self.channel(stream, address)
+        shadow = self.shadow_account()
+        assert shadow
+        self.delegate(stream, address, stat_cb=self.shadow_stat,
+                      server=shadow[0], password=shadow[1],
+                      port=shadow[2], method=shadow[3])
 
+    def auto_shadow_init(self, io_loop=None):
+        io_loop = io_loop if io_loop else tornado.ioloop.IOLoop.current()
+        try:
+            from bs4 import BeautifulSoup
+        except Exception as e:
+            logging.error("%s, please install BeautifulSoup4 for autoshadow", e)
+            sys.exit(1)
 
-def auto_shadow_init(io_loop=None):
-    try:
-        from bs4 import BeautifulSoup
-    except:
-        logging.error("please install BeautifulSoup4 for autoshadow")
-        return None
-    io_loop = io_loop if io_loop else tornado.ioloop.IOLoop.current()
-    @gen.coroutine
-    def callback():
-        r = yield httpclient.AsyncHTTPClient().fetch('http://www.ishadowsocks.com')
-        if not r.body:
-            return
-        soup = BeautifulSoup(r.body, 'lxml')
-        divs = soup.find_all('div', {'class': 'col-lg-4 text-center'}, limit=3)
-        from collections import defaultdict
-        iss = defaultdict(list)
-        for idx, item in enumerate(divs):
-            info = [i.text.split(':')[1].encode('utf-8')
-                    for i in item.find_all('h4', limit=4)]
-            iss['shadow-server'].append(info[0])
-            iss['shadow-port'].append(int(info[1]))
-            iss['shadow-password'].append(info[2])
-            iss['shadow-method'].append(info[3])
-            logging.info('autoshadow %s:%s (%s)',
-                         info[0], info[1], info[3])
-        for name in iss:
-            options._options[name].set(iss[name])
+        @gen.coroutine
+        def callback():
+            r = yield httpclient.AsyncHTTPClient().fetch('http://www.ishadowsocks.com')
+            if not r.body:
+                return
+            soup = BeautifulSoup(r.body, 'lxml')
+            divs = soup.find_all('div', {'class': 'col-lg-4 text-center'}, limit=3)
+            from collections import defaultdict
+            iss = defaultdict(list)
+            for idx, item in enumerate(divs):
+                info = [i.text.split(':')[1].encode('utf-8')
+                        for i in item.find_all('h4', limit=4)]
+                iss['shadow-server'].append(info[0])
+                iss['shadow-port'].append(int(info[1]))
+                iss['shadow-password'].append(info[2])
+                iss['shadow-method'].append(info[3])
+                logging.info('auto-shadow %s:%s (%s)',
+                             info[0], info[1], info[3])
 
-        io_loop.add_timeout(io_loop.time() + 3600, callback=callback)
-    io_loop.run_sync(callback)
+            r = yield httpclient.AsyncHTTPClient().fetch('http://freeshadowsocks.cf')
+            if not r.body:
+                return
+            soup = BeautifulSoup(r.body, 'lxml')
+            divs = soup.find_all('div', {'class': 'col-md-6 text-center'}, limit=4)
+            from collections import defaultdict
+            iss = defaultdict(list)
+            for idx, item in enumerate(divs):
+                info = [i.text.split(':')[1].encode('utf-8')
+                        for i in item.find_all('h4', limit=4)]
+                iss['shadow-server'].append(info[0])
+                iss['shadow-port'].append(int(info[1]))
+                iss['shadow-password'].append(info[2])
+                iss['shadow-method'].append(info[3])
+                logging.info('auto-shadow %s:%s (%s)',
+                             info[0], info[1], info[3])
+
+            self.config.update(iss)
+            self._shadow_load()
+            io_loop.add_timeout(io_loop.time() + self.config['auto-time'], callback=callback)
+        # run first time
+        io_loop.run_sync(callback)
 
 
 if __name__ == '__main__':
@@ -443,14 +510,11 @@ if __name__ == '__main__':
     if options.config:
         options.parse_config_file(options.config)
 
-    # if options.autoshadow:
-    #     auto_shadow_init()
-
     if options.proxy == "http":
         app = tornado.web.Application([(r'.*', SSHttpProxyHandler), ])
         app.listen(options.port)
     elif options.proxy == "socks5":
-        server = SSSocksProxy(StreamChannel)
+        server = SSSocksProxy(Socks5Channel)
         server.listen(options.port)
     elif options.proxy == "shadow":
         if not options.shadow_server or not options.shadow_port or \
