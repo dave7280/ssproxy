@@ -391,9 +391,16 @@ class ShadowChannel(StreamChannel):
 
 
 class SSSocksProxy(tcpserver.TCPServer):
-    def __init__(self, channel, *args, **kwargs):
+    def __init__(self, channel, config=None, *args, **kwargs):
         super(SSSocksProxy, self).__init__(*args, **kwargs)
         self.channel = channel
+        self.config = config
+
+    def shadow(self):
+        pass
+
+    def shadow_stat(self, server, connect_time):
+        pass
 
     def handle_stream(self, stream, address):
         channel = self.channel(stream, address)
@@ -436,8 +443,8 @@ if __name__ == '__main__':
     if options.config:
         options.parse_config_file(options.config)
 
-    if options.autoshadow:
-        auto_shadow_init()
+    # if options.autoshadow:
+    #     auto_shadow_init()
 
     if options.proxy == "http":
         app = tornado.web.Application([(r'.*', SSHttpProxyHandler), ])
@@ -450,7 +457,7 @@ if __name__ == '__main__':
                 not options.shadow_method:
             logging.error("shadow options is not correct")
             sys.exit(2)
-        server = SSSocksProxy(ShadowChannel)
+        server = SSSocksProxy(ShadowChannel, config=options.as_dict())
         server.listen(options.port)
 
     logging.info("Starting proxy %s:%d", options.proxy, options.port)
