@@ -1,7 +1,8 @@
 # config example for ssrpoxy
-proxy="shadow"
-port=3333
-shadow_server="localhost"
-shadow_password=""
-shadow_method="aes-256-cfb"
-shadow_port=3333
+proxy           = "shadow"
+port            = 3333
+shadow_server   = ["s7.freessr.cf"]
+shadow_password = ["kingss.win"]
+shadow_method   = ["aes-256-cfb"]
+shadow_port     = [31857]
+# autoshadow      = True
