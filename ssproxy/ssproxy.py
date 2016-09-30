@@ -505,7 +505,7 @@ class SSSocksProxy(tcpserver.TCPServer):
         io_loop.run_sync(callback)
 
 
-if __name__ == '__main__':
+def main():
     options.parse_command_line()
     if options.config:
         options.parse_config_file(options.config)
@@ -527,3 +527,6 @@ if __name__ == '__main__':
     logging.info("Starting proxy %s:%d", options.proxy, options.port)
     loop = tornado.ioloop.IOLoop.instance()
     loop.start()
+
+if __name__ == '__main__':
+    main()
