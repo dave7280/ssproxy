@@ -3,13 +3,14 @@
 
 from __future__ import absolute_import, division, print_function, \
     with_statement
-
 import sys
+import os
 from random import randint
 import time
 import logging
 import socket
 import struct
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../'))
 
 import tornado.httpserver
 import tornado.ioloop
@@ -33,8 +34,6 @@ define('version', type=bool, help="show version information",
        callback=lambda v:[print("ssproxy 0.0.1"), sys.exit(0)])
 define('config', type=str, help="ssproxy config file")
 define('autoshadow', type=bool, help="autoshadow free acount from ishadowsocks.net")
-# define('reload-time', type=int, default=3600, help='how long reload the config file(seconds)')
-# define('reload-file', type=str, help='reload filename, if not set default is <config>')
 
 SOCKS5_VERSION = 5
 

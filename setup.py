@@ -13,7 +13,10 @@ setup(
     author='liangsijian',
     author_email='liangsijian@foxmail.com',
     url='https://github.com/liangsijian/ssproxy',
-    packages=['ssproxy',],
+    packages=['ssproxy'],
+    package_data={
+        'ssproxy': ['README.md',]
+    },
     install_requires=['tornado'],
     entry_points="""
     [console_scripts]
