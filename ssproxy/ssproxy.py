@@ -406,7 +406,8 @@ class SSSocksProxy(tcpserver.TCPServer):
         self.config['auto-time'] = 3600  # seconds
         if self.config['autoshadow']:
             self.auto_shadow_init(kwargs.get('io_loop'))
-        # self._shadow_load()
+        else:
+            self._shadow_load()
 
     def _shadow_load(self):
         self.shadow_server = {}
